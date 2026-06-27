@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Humid is the Beehive's Basement?</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+  :root {
+    --ink: #1b2433; --muted: #5d6b7e; --border: #e6ebf2;
+    --c1: #f59e0b; --c2: #10b981; --c3: #ef4444; --c4: #6366f1; --c5: #0ea5e9;
+    --line: #0ea5e9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 28px 18px;
+    background: linear-gradient(160deg, #fef9f0 0%, #eef6ff 45%, #f3fbf6 100%);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; }
+  .head {
+    background: linear-gradient(120deg, #f59e0b 0%, #f97316 38%, #0ea5e9 100%);
+    border-radius: 18px; padding: 22px 24px; margin-bottom: 22px; color: #fff;
+    box-shadow: 0 10px 26px rgba(249,115,22,0.22);
+  }
+  h1 { font-size: 25px; margin: 0 0 4px; letter-spacing: -.2px; }
+  .head .sub { color: rgba(255,255,255,0.92); font-size: 13px; }
+  .head .sub .bee { font-style: normal; }
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 18px 20px; box-shadow: 0 6px 20px rgba(20,40,80,0.05); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .stat {
+    background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px;
+    border-top: 4px solid var(--accent, #ccc); box-shadow: 0 4px 14px rgba(20,40,80,0.05);
+  }
+  .stat:nth-child(1) { --accent: var(--c1); }
+  .stat:nth-child(2) { --accent: var(--c2); }
+  .stat:nth-child(3) { --accent: var(--c3); }
+  .stat:nth-child(4) { --accent: var(--c4); }
+  .stat:nth-child(5) { --accent: var(--c5); }
+  .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+  .stat .value { font-size: 25px; font-weight: 700; margin-top: 5px; color: var(--accent, var(--ink)); }
+  .stat .value small { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+  .controls button {
+    border: 1px solid var(--border); background: #fff; color: var(--ink);
+    padding: 7px 15px; border-radius: 999px; font-size: 13px; font-weight: 500; cursor: pointer; transition: .15s;
+  }
+  .controls button:hover { border-color: #b9c3d1; transform: translateY(-1px); }
+  .controls button.active {
+    background: linear-gradient(120deg, #f97316, #0ea5e9); border-color: transparent; color: #fff;
+    box-shadow: 0 4px 12px rgba(14,165,233,0.28);
+  }
+  .controls .spacer { flex: 1; }
+  .updated { color: var(--muted); font-size: 12px; }
+  .chart-box { position: relative; height: 420px; }
+  .empty { color: var(--muted); text-align: center; padding: 60px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <h1>🐝 How Humid is the Beehive's Basement?</h1>
+    <div class="sub">Live readings, logged hourly</div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="card">
+    <div class="controls">
+      <button data-range="1">24 h</button>
+      <button data-range="7" class="active">7 days</button>
+      <button data-range="30">30 days</button>
+      <button data-range="0">All</button>
+      <span class="spacer"></span>
+      <span class="updated" id="updated"></span>
+    </div>
+    <div class="chart-box"><canvas id="chart"></canvas></div>
+    <div class="empty" id="empty" style="display:none">No data yet — the logger writes one reading per hour.</div>
+  </div>
+</div>
+
+<script>
+let RANGE_DAYS = 7;      // default view
+let allRows = [];        // [{t: Date, h: number}]
+let chart = null;
+
+function parseCSV(text) {
+  const rows = [];
+  const lines = text.trim().split(/\r?\n/);
+  for (let i = 1; i < lines.length; i++) {          // skip header
+    const [ts, h] = lines[i].split(",");
+    const t = new Date(ts);
+    const v = parseFloat(h);
+    if (!isNaN(t.getTime()) && !isNaN(v)) rows.push({ t, h: v });
+  }
+  rows.sort((a, b) => a.t - b.t);
+  return rows;
+}
+
+function filtered() {
+  if (!RANGE_DAYS) return allRows;
+  const cutoff = Date.now() - RANGE_DAYS * 86400000;
+  return allRows.filter(r => r.t.getTime() >= cutoff);
+}
+
+function fmt(n) { return n == null ? "–" : n.toFixed(1); }
+
+function renderStats(rows) {
+  const el = document.getElementById("stats");
+  if (!rows.length) { el.innerHTML = ""; return; }
+  const hs = rows.map(r => r.h);
+  const current = allRows[allRows.length - 1].h;     // latest overall
+  const min = Math.min(...hs), max = Math.max(...hs);
+  const avg = hs.reduce((a, b) => a + b, 0) / hs.length;
+  const cards = [
+    ["Current", `${fmt(current)}<small> %</small>`],
+    ["Min", `${fmt(min)}<small> %</small>`],
+    ["Max", `${fmt(max)}<small> %</small>`],
+    ["Average", `${fmt(avg)}<small> %</small>`],
+    ["Readings", `${rows.length}`],
+  ];
+  el.innerHTML = cards.map(([l, v]) =>
+    `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
+}
+
+function gradientFill(ctx, area) {
+  const g = ctx.createLinearGradient(0, area.top, 0, area.bottom);
+  g.addColorStop(0, "rgba(249,115,22,0.32)");
+  g.addColorStop(0.5, "rgba(14,165,233,0.18)");
+  g.addColorStop(1, "rgba(16,185,129,0.04)");
+  return g;
+}
+
+function renderChart(rows) {
+  const empty = document.getElementById("empty");
+  const canvas = document.getElementById("chart");
+  if (!rows.length) { empty.style.display = "block"; canvas.style.display = "none"; return; }
+  empty.style.display = "none"; canvas.style.display = "block";
+
+  const data = rows.map(r => ({ x: r.t, y: r.h }));
+  if (chart) {
+    chart.data.datasets[0].data = data;
+    chart.update();
+    return;
+  }
+  chart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets: [{
+      label: "Humidity (%)", data,
+      borderColor: "#f97316",
+      backgroundColor: (c) => {
+        const { ctx, chartArea } = c.chart;
+        if (!chartArea) return "rgba(249,115,22,0.18)";
+        return gradientFill(ctx, chartArea);
+      },
+      borderWidth: 2.5, fill: true, tension: 0.3,
+      pointRadius: 0, pointHoverRadius: 5, pointHoverBackgroundColor: "#0ea5e9",
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { type: "time", time: { tooltipFormat: "MMM d, HH:mm" },
+             grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 24 } },
+        y: { suggestedMin: 30, suggestedMax: 70, title: { display: true, text: "Relative humidity (%)" },
+             grid: { color: "#eef1f5" } },
+      },
+      plugins: { legend: { display: false },
+        tooltip: { backgroundColor: "rgba(27,36,51,0.92)", padding: 10, displayColors: false,
+          callbacks: { label: c => ` ${c.parsed.y}% RH` } } },
+    },
+  });
+}
+
+function showError(html) {
+  document.getElementById("updated").textContent = "";
+  const empty = document.getElementById("empty");
+  const canvas = document.getElementById("chart");
+  empty.style.display = "block"; canvas.style.display = "none";
+  empty.innerHTML = html;
+}
+
+function refresh() {
+  // A file:// page can't read the local CSV — must be served over HTTP.
+  if (location.protocol === "file:") {
+    showError('This page must be opened through the local web server, not by ' +
+      'double-clicking the file.<br><br>In Terminal, run:<br>' +
+      '<code style="background:#f0f3f7;padding:3px 7px;border-radius:6px">' +
+      'python3 -m http.server 8770 --directory ~/midea-humidity</code><br><br>' +
+      'then open <a href="http://localhost:8770">http://localhost:8770</a>');
+    return;
+  }
+  // cache-bust so we always get the freshest CSV
+  fetch("midea-humidity/humidity_log.csv?_=" + Date.now())
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
+    .then(text => {
+      allRows = parseCSV(text);
+      const rows = filtered();
+      renderStats(rows);
+      renderChart(rows);
+      const last = allRows.length ? allRows[allRows.length - 1].t : null;
+      document.getElementById("updated").textContent =
+        last ? "Last reading: " + last.toLocaleString() : "";
+    })
+    .catch(e => showError("Could not load humidity_log.csv (" + e.message + "). " +
+      "Make sure the logger has run and the CSV is in the same folder as this page."));
+}
+
+document.querySelectorAll(".controls button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".controls button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    RANGE_DAYS = parseInt(b.dataset.range, 10);
+    const rows = filtered();
+    renderStats(rows);
+    if (chart) { chart.destroy(); chart = null; }
+    renderChart(rows);
+  });
+});
+
+refresh();
+setInterval(refresh, 5 * 60 * 1000);   // auto-refresh every 5 minutes
+</script>
+</body>
+</html>
