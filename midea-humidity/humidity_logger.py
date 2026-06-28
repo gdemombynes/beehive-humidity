@@ -25,6 +25,8 @@ from secrets import token_hex
 import midea_beautiful.cloud as cloudmod
 from midea_beautiful import appliance_state, connect_to_cloud
 from midea_beautiful.cloud import MideaCloud, _decode_from_csv, _encode_as_csv
+import time
+
 from midea_beautiful.exceptions import ProtocolError
 from midea_beautiful.midea import SUPPORTED_APPS
 
@@ -111,8 +113,14 @@ def log() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        log()
-    except Exception as exc:
-        print(f"ERROR {type(exc).__name__}: {exc}", file=sys.stderr)
-        sys.exit(1)
+    last_exc = None
+    for attempt in range(3):
+        try:
+            log()
+            sys.exit(0)
+        except Exception as exc:
+            last_exc = exc
+            print(f"ERROR {type(exc).__name__}: {exc} (attempt {attempt + 1}/3)", file=sys.stderr)
+            if attempt < 2:
+                time.sleep(10)
+    sys.exit(1)
